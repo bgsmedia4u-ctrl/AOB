@@ -6,6 +6,9 @@ import fs from 'fs';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { initDb, db } from './db.js';
+import dotenv from 'dotenv';
+dotenv.config();
+
 
 // Route imports
 import authRouter from './routes/auth.js';
@@ -15,6 +18,8 @@ import meetingsRouter from './routes/meetings.js';
 import communicationsRouter from './routes/communications.js';
 import analyticsRouter from './routes/analytics.js';
 import auditRouter from './routes/audit.js';
+import gmailRouter from './routes/gmail.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,6 +93,8 @@ app.use('/api/meetings', meetingsRouter);
 app.use('/api/communications', communicationsRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/audit', auditRouter);
+app.use('/api/gmail', gmailRouter);
+
 
 // Fallback to React index.html for SPA routing in production
 app.get('*', (req, res) => {

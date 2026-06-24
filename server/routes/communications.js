@@ -2,8 +2,27 @@ import express from 'express';
 import { db } from '../db.js';
 import { logAudit } from '../server.js';
 import { requireRole, isAuthenticated } from './auth.js';
+import { gmail } from '../gmail-config.js';
 
 const router = express.Router();
+
+// Helper: encode email to base64url for Gmail API
+function buildRawEmail(to, subject, body) {
+  const emailLines = [
+    `To: ${to}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'MIME-Version: 1.0',
+    `Subject: ${subject}`,
+    '',
+    body
+  ];
+  const emailString = emailLines.join('\n');
+  return Buffer.from(emailString)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
 
 // 1. GET ALL COMMUNICATION LOGS (with filters)
 router.get('/logs', isAuthenticated, async (req, res) => {
@@ -133,9 +152,6 @@ router.post('/send-templated', requireRole(['Super Admin', 'Admin']), async (req
       return res.status(400).json({ error: 'No valid alumni found for selected IDs.' });
     }
 
-    // Process and dispatch each email (simulation)
-    const logDetails = [];
-    
     // Create master communication log
     const commRes = await db.run(`
       INSERT INTO communications (type, datetime, subject, message, staff_initiator, response_received)
@@ -144,49 +160,47 @@ router.post('/send-templated', requireRole(['Super Admin', 'Admin']), async (req
 
     const communicationId = commRes.lastID;
 
-    // Link all recipients to the communication log
+    let sentCount = 0;
+    const skipped = [];
+
+    // Send real Gmail to each recipient
     for (const r of recipients) {
       await db.run('INSERT INTO communication_alumni (communication_id, alumnus_id) VALUES (?, ?)', [communicationId, r.id]);
-      
-      // Simulate rendering template placeholders for logs/email stdout
-      let renderedBody = template.body
+
+      if (!r.email || !r.email.includes('@')) {
+        skipped.push(r.name);
+        continue;
+      }
+
+      const renderedBody = template.body
         .replace(/{{name}}/g, r.name)
         .replace(/{{batch}}/g, r.batch_year);
-      
-      logDetails.push({
-        to: r.email,
-        name: r.name,
-        subject: template.subject,
-        body: renderedBody
-      });
-    }
 
-    // Write the simulated email dispatch log to disk for staff diagnostics
-    const emailDispatchPath = './server/simulated_emails.log';
-    const dispatchEntry = `
-========================================
-TIMESTAMP: ${new Date().toISOString()}
-SENDER (STAFF): ${username} (Role: ${req.session.user.role})
-COMMUNICATION ID: ${communicationId}
-TEMPLATE: ${template.name}
-----------------------------------------
-DISPATCHED EMAILS:
-${JSON.stringify(logDetails, null, 2)}
-========================================
-\n`;
-    
-    fs.appendFileSync(emailDispatchPath, dispatchEntry);
+      const rawEmail = buildRawEmail(r.email, template.subject, renderedBody);
+
+      try {
+        await gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw: rawEmail }
+        });
+        sentCount++;
+      } catch (emailErr) {
+        console.error(`Failed to send email to ${r.email}:`, emailErr.message);
+        skipped.push(r.name);
+      }
+    }
 
     await logAudit(
       username,
       req.session.user.role,
       'SEND_EMAIL_TEMPLATE',
-      `Sent template '${template.name}' to ${recipients.length} alumni. Simulated mail output appended to server logs.`
+      `Sent template '${template.name}' via Gmail to ${sentCount} alumni. Skipped: ${skipped.length}.`
     );
 
     res.json({ 
-      message: `Simulated dispatch successful. Emails sent to ${recipients.length} recipients.`,
-      communicationId 
+      message: `Email dispatch complete. Sent: ${sentCount}, Skipped (no email): ${skipped.length}.`,
+      communicationId,
+      skipped
     });
   } catch (error) {
     console.error('Send templated email error:', error);
