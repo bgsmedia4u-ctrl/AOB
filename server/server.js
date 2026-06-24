@@ -20,6 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1); // Trust Render's reverse proxy for secure cookies
 const PORT = process.env.PORT || 5000;
 
 // Enable CORS for frontend development
