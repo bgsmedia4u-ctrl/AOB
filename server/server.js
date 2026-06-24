@@ -24,7 +24,10 @@ const PORT = process.env.PORT || 5000;
 
 // Enable CORS for frontend development
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Dynamically allow the origin of the requesting site (e.g. Cloudflare Pages or localhost)
+    callback(null, true);
+  },
   credentials: true
 }));
 
@@ -38,7 +41,8 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: false, // Set to true in production with HTTPS
+    secure: true, // Required for cross-origin HTTPS deployments
+    sameSite: 'none', // Required for cross-origin cookies between Cloudflare and Render
     maxAge: 30 * 60 * 1000 // 30 minutes in milliseconds
   }
 }));
