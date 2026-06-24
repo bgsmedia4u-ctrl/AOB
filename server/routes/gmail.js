@@ -3,15 +3,15 @@ import { oauth2Client } from '../gmail-config.js';
 
 const router = express.Router();
 
-// STEP 1: Visit this route once to get the Google consent URL
-// Only Super Admin can initiate this flow
+// STEP 1: Visit this route once — it will redirect you to Google's consent screen
+// Only needs to be done once to get the refresh token
 router.get('/auth-url', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent', // Force showing consent screen to always get refresh_token
+    prompt: 'consent', // Force consent screen to always get refresh_token
     scope: ['https://www.googleapis.com/auth/gmail.send']
   });
-  res.json({ url });
+  res.redirect(url); // Redirect directly to Google
 });
 
 // STEP 2: Google redirects here after user consents
