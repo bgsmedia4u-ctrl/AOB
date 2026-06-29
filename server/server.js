@@ -28,11 +28,19 @@ const app = express();
 app.set('trust proxy', 1); // Trust Render's reverse proxy for secure cookies
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS for frontend development
+// CORS — only allow explicitly listed origins
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+  .split(',')
+  .map(o => o.trim());
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Dynamically allow the origin of the requesting site (e.g. Cloudflare Pages or localhost)
-    callback(null, true);
+    // Allow server-to-server calls (no origin) and explicitly listed origins
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' is not allowed.`));
+    }
   },
   credentials: true
 }));
@@ -41,8 +49,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Setup Session Middleware (30 minutes session expiry)
+if (!process.env.SESSION_SECRET) {
+  throw new Error('[FATAL] SESSION_SECRET environment variable is not set. Refusing to start.');
+}
 app.use(session({
-  secret: 'bgs-pu-college-alumni-secret-key-2026',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -53,8 +64,14 @@ app.use(session({
   }
 }));
 
-// Serve upload attachments statically (only authenticated or handled securely, served directly for simplicity)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve uploads only to authenticated users (photos and attachments are private)
+app.use('/uploads', (req, res, next) => {
+  if (req.session && req.session.user) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Authentication required to access uploads.' });
+  }
+}, express.static(path.join(__dirname, 'uploads')));
 
 // Serve React production build statically (in case client is built)
 app.use(express.static(path.join(__dirname, '../client/dist')));
@@ -104,6 +121,21 @@ app.get('*', (req, res) => {
   } else {
     res.status(404).send('Backend is running. Frontend build not found. Run client in dev mode.');
   }
+});
+
+// Central error handling middleware — catches multer errors, CORS errors, and unhandled throws
+app.use((err, req, res, next) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
+  }
+  if (err.message && (err.message.includes('Only') || err.message.includes('allowed'))) {
+    return res.status(400).json({ error: err.message }); // Multer fileFilter rejection
+  }
+  if (err.message && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ error: err.message });
+  }
+  console.error('[Server Error]', err.stack || err);
+  res.status(500).json({ error: 'Internal server error.' });
 });
 
 // Daily Backup Simulator

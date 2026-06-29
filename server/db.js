@@ -176,6 +176,21 @@ export async function initDb() {
     );
   `);
 
+  // Performance indexes — convert full table scans to index seeks
+  await db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_alumni_batch_year   ON alumni(batch_year);
+    CREATE INDEX IF NOT EXISTS idx_alumni_name         ON alumni(name);
+    CREATE INDEX IF NOT EXISTS idx_alumni_stream       ON alumni(stream);
+    CREATE INDEX IF NOT EXISTS idx_alumni_email        ON alumni(email);
+    CREATE INDEX IF NOT EXISTS idx_alumni_is_archived  ON alumni(is_archived);
+    CREATE INDEX IF NOT EXISTS idx_milestones_alumnus  ON milestones(alumnus_id);
+    CREATE INDEX IF NOT EXISTS idx_milestones_type     ON milestones(type);
+    CREATE INDEX IF NOT EXISTS idx_meetings_datetime   ON meetings(datetime);
+    CREATE INDEX IF NOT EXISTS idx_meetings_status     ON meetings(status);
+    CREATE INDEX IF NOT EXISTS idx_audit_timestamp     ON audit_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_audit_action_type   ON audit_logs(action_type);
+  `);
+
   // Seed Users
   const userCount = await db.get('SELECT COUNT(*) as count FROM users');
   if (userCount.count === 0) {

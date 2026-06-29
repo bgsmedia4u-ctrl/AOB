@@ -33,21 +33,33 @@ router.get('/', isAuthenticated, async (req, res) => {
 
     const meetings = await db.all(query, params);
 
-    // For each meeting, fetch the linked alumni profiles
-    const result = [];
-    for (const meet of meetings) {
-      const linkedAlumni = await db.all(`
-        SELECT a.id, a.name, a.batch_year, a.stream, a.email 
+    // Batch-fetch all linked alumni in a single JOIN (avoids N+1)
+    const meetingIds = meetings.map(m => m.id);
+    let allLinkedAlumni = [];
+    if (meetingIds.length > 0) {
+      const placeholders = meetingIds.map(() => '?').join(',');
+      allLinkedAlumni = await db.all(`
+        SELECT ma.meeting_id, a.id, a.name, a.batch_year, a.stream, a.email 
         FROM alumni a 
         JOIN meeting_alumni ma ON a.id = ma.alumnus_id 
-        WHERE ma.meeting_id = ?
-      `, [meet.id]);
+        WHERE ma.meeting_id IN (${placeholders})
+      `, meetingIds);
+    }
 
-      result.push({
-        ...meet,
-        linked_alumni: linkedAlumni
+    // Group alumni by meeting_id in memory
+    const alumniByMeeting = {};
+    for (const row of allLinkedAlumni) {
+      if (!alumniByMeeting[row.meeting_id]) alumniByMeeting[row.meeting_id] = [];
+      alumniByMeeting[row.meeting_id].push({
+        id: row.id, name: row.name, batch_year: row.batch_year,
+        stream: row.stream, email: row.email
       });
     }
+
+    const result = meetings.map(m => ({
+      ...m,
+      linked_alumni: alumniByMeeting[m.id] || []
+    }));
 
     res.json(result);
   } catch (error) {

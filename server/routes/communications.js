@@ -64,21 +64,33 @@ router.get('/logs', isAuthenticated, async (req, res) => {
 
     const logs = await db.all(query, params);
 
-    // Fetch recipients for each communication log
-    const result = [];
-    for (const log of logs) {
-      const recipients = await db.all(`
-        SELECT a.id, a.name, a.batch_year, a.stream, a.email
+    // Batch-fetch all recipients in a single JOIN (avoids N+1)
+    const logIds = logs.map(l => l.id);
+    let allRecipients = [];
+    if (logIds.length > 0) {
+      const placeholders = logIds.map(() => '?').join(',');
+      allRecipients = await db.all(`
+        SELECT ca.communication_id, a.id, a.name, a.batch_year, a.stream, a.email
         FROM alumni a
         JOIN communication_alumni ca ON a.id = ca.alumnus_id
-        WHERE ca.communication_id = ?
-      `, [log.id]);
+        WHERE ca.communication_id IN (${placeholders})
+      `, logIds);
+    }
 
-      result.push({
-        ...log,
-        recipients
+    // Group recipients by communication_id in memory
+    const recipientsByLog = {};
+    for (const row of allRecipients) {
+      if (!recipientsByLog[row.communication_id]) recipientsByLog[row.communication_id] = [];
+      recipientsByLog[row.communication_id].push({
+        id: row.id, name: row.name, batch_year: row.batch_year,
+        stream: row.stream, email: row.email
       });
     }
+
+    const result = logs.map(log => ({
+      ...log,
+      recipients: recipientsByLog[log.id] || []
+    }));
 
     res.json(result);
   } catch (error) {

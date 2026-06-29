@@ -2,6 +2,8 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import { db } from '../db.js';
 import { logAudit } from '../server.js';
+import { loginLimiter } from '../limiters.js';
+
 
 const router = express.Router();
 
@@ -29,8 +31,8 @@ export function requireRole(allowedRoles) {
   ];
 }
 
-// Login route
-router.post('/login', async (req, res) => {
+// Login route (rate-limited: max 15 attempts per IP per 15 minutes)
+router.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
