@@ -328,4 +328,146 @@ router.delete('/templates/:id', requireRole(['Super Admin', 'Admin']), async (re
   }
 });
 
+// 8. SEND CUSTOM (COMPOSED) EMAIL directly to selected alumni (Admin/Super Admin only)
+router.post('/send-custom-email', requireRole(['Super Admin', 'Admin']), async (req, res) => {
+  const { subject, body, alumni_ids = [] } = req.body;
+
+  if (!subject || !body) {
+    return res.status(400).json({ error: 'Subject and email body are required.' });
+  }
+  if (!alumni_ids || alumni_ids.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one alumnus recipient.' });
+  }
+
+  try {
+    const username = req.session.user.username;
+
+    // Fetch recipient alumni
+    const idList = alumni_ids.map(() => '?').join(',');
+    const recipients = await db.all(
+      `SELECT id, name, batch_year, email FROM alumni WHERE id IN (${idList})`,
+      alumni_ids
+    );
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ error: 'No valid alumni found for selected IDs.' });
+    }
+
+    // Create master communication log entry
+    const commRes = await db.run(`
+      INSERT INTO communications (type, datetime, subject, message, staff_initiator, response_received)
+      VALUES ('email', CURRENT_TIMESTAMP, ?, ?, ?, 'pending')
+    `, [subject.trim(), body.trim(), username]);
+
+    const communicationId = commRes.lastID;
+
+    let sentCount = 0;
+    const skipped = [];
+
+    for (const r of recipients) {
+      // Link to communication log
+      await db.run(
+        'INSERT INTO communication_alumni (communication_id, alumnus_id) VALUES (?, ?)',
+        [communicationId, r.id]
+      );
+
+      if (!r.email || !r.email.includes('@')) {
+        skipped.push(r.name);
+        continue;
+      }
+
+      // Replace {{name}} and {{batch}} placeholders in body
+      const renderedBody = body
+        .replace(/{{name}}/g, r.name)
+        .replace(/{{batch}}/g, r.batch_year);
+
+      try {
+        await sendEmail({ to: r.email, subject: subject.trim(), body: renderedBody });
+        sentCount++;
+      } catch (emailErr) {
+        console.error(`Failed to send email to ${r.email}:`, emailErr.message);
+        skipped.push(r.name);
+      }
+    }
+
+    await logAudit(
+      username,
+      req.session.user.role,
+      'SEND_CUSTOM_EMAIL',
+      `Sent custom email: "${subject}" to ${sentCount} alumni. Skipped (no email): ${skipped.length}.`
+    );
+
+    res.json({
+      message: `Email dispatch complete. Sent: ${sentCount}, Skipped (no email): ${skipped.length}.`,
+      communicationId,
+      sentCount,
+      skipped
+    });
+  } catch (error) {
+    console.error('Send custom email error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 9. LOG WHATSAPP OUTREACH (Admin/Super Admin only)
+// Opens a WhatsApp web link on the client side; this endpoint logs the attempt
+router.post('/log-whatsapp', requireRole(['Super Admin', 'Admin']), async (req, res) => {
+  const { message, alumni_ids = [] } = req.body;
+
+  if (!message) {
+    return res.status(400).json({ error: 'Message content is required.' });
+  }
+  if (!alumni_ids || alumni_ids.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one alumnus recipient.' });
+  }
+
+  try {
+    const username = req.session.user.username;
+    const subject = `WhatsApp Outreach — ${new Date().toLocaleDateString('en-IN')}`;
+
+    const commRes = await db.run(`
+      INSERT INTO communications (type, datetime, subject, message, staff_initiator, response_received)
+      VALUES ('WhatsApp', CURRENT_TIMESTAMP, ?, ?, ?, 'pending')
+    `, [subject, message.trim(), username]);
+
+    const communicationId = commRes.lastID;
+
+    // Fetch recipients and link them
+    const idList = alumni_ids.map(() => '?').join(',');
+    const recipients = await db.all(
+      `SELECT id, name, mobile FROM alumni WHERE id IN (${idList})`,
+      alumni_ids
+    );
+
+    for (const r of recipients) {
+      await db.run(
+        'INSERT INTO communication_alumni (communication_id, alumnus_id) VALUES (?, ?)',
+        [communicationId, r.id]
+      );
+    }
+
+    await logAudit(
+      username,
+      req.session.user.role,
+      'WHATSAPP_OUTREACH',
+      `Initiated WhatsApp outreach to ${recipients.length} alumni. Message: "${message.substring(0, 60)}..."`
+    );
+
+    // Return recipient mobile numbers so the client can open wa.me links
+    res.json({
+      message: 'WhatsApp outreach logged successfully.',
+      communicationId,
+      recipients: recipients.map(r => ({
+        id: r.id,
+        name: r.name,
+        mobile: r.mobile
+      }))
+    });
+  } catch (error) {
+    console.error('Log WhatsApp outreach error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
+
