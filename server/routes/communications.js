@@ -2,7 +2,7 @@ import express from 'express';
 import { db } from '../db.js';
 import { logAudit } from '../server.js';
 import { requireRole, isAuthenticated } from './auth.js';
-import { gmail } from '../gmail-config.js';
+import { sendEmail } from '../gmail-config.js';
 
 const router = express.Router();
 
@@ -179,9 +179,11 @@ router.post('/send-templated', requireRole(['Super Admin', 'Admin']), async (req
       const rawEmail = buildRawEmail(r.email, template.subject, renderedBody);
 
       try {
-        await gmail.users.messages.send({
-          userId: 'me',
-          requestBody: { raw: rawEmail }
+        await sendEmail({
+          to: r.email,
+          subject: template.subject,
+          body: renderedBody,
+          rawEmail
         });
         sentCount++;
       } catch (emailErr) {
@@ -249,6 +251,67 @@ router.put('/templates/:id', requireRole(['Super Admin', 'Admin']), async (req, 
     res.json({ message: 'Template updated successfully.' });
   } catch (error) {
     console.error('Update template error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 6. CREATE TEMPLATE (Admin / Super Admin only)
+router.post('/templates', requireRole(['Super Admin', 'Admin']), async (req, res) => {
+  const { name, subject, body } = req.body;
+
+  if (!name || !subject || !body) {
+    return res.status(400).json({ error: 'Name, subject, and body contents are all required.' });
+  }
+
+  try {
+    const existing = await db.get('SELECT id FROM templates WHERE name = ?', [name.trim()]);
+    if (existing) {
+      return res.status(400).json({ error: `A template named '${name.trim()}' already exists.` });
+    }
+
+    const insertRes = await db.run(
+      'INSERT INTO templates (name, subject, body) VALUES (?, ?, ?)',
+      [name.trim(), subject.trim(), body.trim()]
+    );
+
+    const templateId = insertRes.lastID;
+
+    await logAudit(
+      req.session.user.username,
+      req.session.user.role,
+      'CREATE_TEMPLATE',
+      `Created communication template: '${name.trim()}'`
+    );
+
+    res.status(201).json({ message: 'Template created successfully.', id: templateId });
+  } catch (error) {
+    console.error('Create template error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 7. DELETE TEMPLATE (Admin / Super Admin only)
+router.delete('/templates/:id', requireRole(['Super Admin', 'Admin']), async (req, res) => {
+  const templateId = req.params.id;
+
+  try {
+    const existing = await db.get('SELECT name FROM templates WHERE id = ?', [templateId]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    await db.run('DELETE FROM templates WHERE id = ?', [templateId]);
+
+    await logAudit(
+      req.session.user.username,
+      req.session.user.role,
+      'DELETE_TEMPLATE',
+      `Deleted communication template: '${existing.name}'`
+    );
+
+    res.json({ message: 'Template deleted successfully.' });
+  } catch (error) {
+    console.error('Delete template error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

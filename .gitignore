@@ -1,0 +1,29 @@
+# Dependency directories
+node_modules/
+client/node_modules/
+
+# Production builds
+client/dist/
+
+# Local databases and backups
+server/bgs_alumni.db
+server/bgs_alumni.db-journal
+server/backups/
+
+# User uploads/attachments
+server/uploads/*
+!server/uploads/.gitkeep
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS and Editors
+.DS_Store
+.vscode/
+.idea/
